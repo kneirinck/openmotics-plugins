@@ -36,7 +36,7 @@ class MQTTClient(OMPluginBase):
     }
 
     input_status_map = {'ON': 1,
-                        'OFF': 0}    
+                        'OFF': 0}
 
     config_description = [
         {'name': 'hostname',
@@ -93,6 +93,10 @@ class MQTTClient(OMPluginBase):
         {'name': 'output_status_retain',
          'type': 'bool',
          'description': 'Output status message retain.'},
+        # brightness status
+        {'name': 'brightness_status_topic_format',
+         'type': 'str',
+         'description': 'Output status topic format. Default: openmotics/brightness/{id}/state'},
         # shutter status
         {'name': 'shutter_status_enabled',
          'type': 'bool',
@@ -179,6 +183,10 @@ class MQTTClient(OMPluginBase):
         {'name': 'output_command_topic',
          'type': 'str',
          'description': 'Topic to subscribe to for output command messages. Leave empty to turn off.'},
+        # brightness command
+        {'name': 'brightness_command_topic',
+         'type': 'str',
+         'description': 'Topic to subscribe to for brightness command messages. Leave empty to turn off.'},
         # shutter command
         {'name': 'shutter_command_topic',
          'type': 'str',
@@ -205,6 +213,7 @@ class MQTTClient(OMPluginBase):
         'input_status_topic_format': 'openmotics/input/{id}/state',
         'input_status_qos': 0,
         'output_status_topic_format': 'openmotics/output/{id}/state',
+        'brightness_status_topic_format': 'openmotics/brightness/{id}/state',
         'output_status_qos': 0,
         'shutter_state_topic_format': 'openmotics/shutter/{id}/state',
         'shutter_position_topic_format': 'openmotics/shutter/{id}/position',
@@ -221,6 +230,7 @@ class MQTTClient(OMPluginBase):
         'energy_status_qos': 0,
         'energy_status_poll_frequency': 3600,
         'output_command_topic': 'openmotics/output/+/set',
+        'brightness_command_topic': 'openmotics/brightness/+/set',
         'shutter_command_topic': 'openmotics/shutter/+/set',
         'shutter_position_command_topic': 'openmotics/shutter/+/position/set',
         'logging_topic': 'openmotics/logging',
@@ -241,7 +251,7 @@ class MQTTClient(OMPluginBase):
             paho_mqtt_wheel = '/opt/openmotics/python/plugins/MQTTClient/paho_mqtt-1.5.0-py2-none-any.whl'
         else:
             paho_mqtt_wheel = '/opt/openmotics/python/plugins/MQTTClient/paho_mqtt-1.6.1-py3-none-any.whl'
-            
+
         if paho_mqtt_wheel not in sys.path:
             sys.path.insert(0, paho_mqtt_wheel)
 
@@ -281,6 +291,8 @@ class MQTTClient(OMPluginBase):
         self._output_topic   = self._config.get('output_status_topic_format')
         self._output_qos     = int(self._config.get('output_status_qos'))
         self._output_retain  = self._config.get('output_status_retain')
+        # brightness
+        self._brightness_topic   = self._config.get('brightness_status_topic_format')
         # shutters
         self._shutter_enabled          = self._config.get('shutter_status_enabled')
         self._shutter_topic            = self._config.get('shutter_state_topic_format')
@@ -320,6 +332,8 @@ class MQTTClient(OMPluginBase):
         self._power_enabled = (self._sensor_config.get('power').get('enabled') or self._sensor_config.get('energy').get('enabled'))
         # output command
         self._output_command_topic = self._config.get('output_command_topic')
+        # brightness command
+        self._brightness_command_topic = self._config.get('brightness_command_topic')
         # shutter command
         self._shutter_command_topic = self._config.get('shutter_command_topic')
         # shutter position command
@@ -427,6 +441,8 @@ class MQTTClient(OMPluginBase):
                                                     'hardware_type': config['module']['hardware_type'],
                                                     'module_type': {'o': 'output',
                                                                     'O': 'output',
+                                                                    'r': 'output',
+                                                                    'R': 'output',
                                                                     'd': 'dimmer',
                                                                     'D': 'dimmer'}[config['module_type']],
                                                     'room_id': config['room'],
@@ -684,16 +700,18 @@ class MQTTClient(OMPluginBase):
                     dimmer = current_output_status[output_id].get('dimmer')
                     if status is None or dimmer is None:
                         return
-             
-                    # set vars for control flow 
-                    event_status = 1 if event_data['status']['on'] is True else 0
+
+                    # set vars for control flow
+                    event_status = "ON" if event_data['status']['on'] is True else "OFF"
                     event_dimmer = event_data['status'].get('value')
-    
-                    self._process_output_event(output_id, event_status, event_dimmer)
+
+                    self._process_output_event(output_id, event_status)
+                    if current_output_status[output_id]['module_type'] == 'dimmer':
+                        self._process_brightness_event(output_id, event_dimmer)
             except Exception as ex:
                 logger.exception('Error processing outputs: {0}'.format(ex))
 
-    def _process_output_event(self, output_id, event_status, event_dimmer, force_change=False):
+    def _process_output_event(self, output_id, event_status, force_change=False):
         current_output_status = self._outputs
         name = current_output_status[output_id].get('name')
         status = current_output_status[output_id].get('status')
@@ -703,27 +721,49 @@ class MQTTClient(OMPluginBase):
         if event_status != status:
             change = True
             current_output_status[output_id]['status'] = event_status
+
+        if change is True or force_change is True:
+            if not force_change:
+                self._log('Output {0} ({1}) changed from {2} to {3} ({4} %)'.format(output_id, name, status, event_status, dimmer))
+                logger.info('Output {0} ({1}) changed from {2} to {3} ({4} %)'.format(output_id, name, status, event_status, dimmer))
+            data = {'id': output_id,
+                    'name': name,
+                    'onoff': event_status,
+                    'value': dimmer,
+                    'timestamp': self._timestamp2isoformat()}
+            thread = Thread(
+                target=self._send,
+                args=(self._output_topic.format(id=output_id), data, self._output_qos, self._output_retain)
+            )
+            thread.start()
+
+    def _process_brightness_event(self, output_id, event_dimmer, force_change=False):
+        current_output_status = self._outputs
+        name = current_output_status[output_id].get('name')
+        status = current_output_status[output_id].get('status')
+        dimmer = current_output_status[output_id].get('dimmer')
+
+        change = False
         if event_dimmer is not None and dimmer != event_dimmer:
             change = True
             current_output_status[output_id]['dimmer'] = event_dimmer
 
         if change is True or force_change is True:
-            level = event_status * 100
-
             if current_output_status[output_id]['module_type'] != 'output':
                 # if there's no change to dimmer, keep old value
                 level = event_dimmer or dimmer
 
             if not force_change:
-                self._log('Output {0} ({1}) changed from {2} to {3}'.format(output_id, name, status, event_status))
-                logger.info('Output {0} ({1}) changed from {2} to {3}'.format(output_id, name, status, event_status))
+                self._log('Output {0} ({1}) state is {2}, brightness changed from {3} % to {4} %'.format(output_id, name, status, dimmer, level))
+                logger.info('Output {0} ({1}) has state {2}, brightness changed from {3} % to {4} %'.format(output_id, name, status, dimmer, level))
             data = {'id': output_id,
                     'name': name,
+                    'onoff': status,
                     'value': level,
                     'timestamp': self._timestamp2isoformat()}
             thread = Thread(
                 target=self._send,
-                args=(self._output_topic.format(id=output_id), data, self._output_qos, self._output_retain)
+                args=(self._brightness_topic.format(id=output_id), data, self._output_qos, self._output_retain)
             )
             thread.start()
 
@@ -936,7 +976,9 @@ class MQTTClient(OMPluginBase):
                 if event_status is None or event_dimmer is None:
                     continue
 
-                self._process_output_event(output_id, event_status, event_dimmer, force_change=True)
+                self._process_output_event(output_id, event_status, force_change=True)
+                if current_output_status[output_id]['module_type'] == 'dimmer':
+                    self._process_brightness_event(output_id, event_dimmer, force_change=True)
 
             # load initial shutters status
             current_shutter_status = self._shutters
@@ -977,6 +1019,14 @@ class MQTTClient(OMPluginBase):
                 except Exception as ex:
                     logger.exception('Could not subscribe to {0}: {1}'.format(self._output_command_topic, ex))
 
+            # subscribe to brightness command topic if provided
+            if self._brightness_command_topic:
+                try:
+                    self.client.subscribe(self._brightness_command_topic)
+                    logger.info('Subscribed to {0}'.format(self._brightness_command_topic))
+                except Exception as ex:
+                    logger.exception('Could not subscribe to {0}: {1}'.format(self._brightness_command_topic, ex))
+
             # subscribe to shutter command topic if provided
             if self._shutter_command_topic:
                 try:
@@ -997,6 +1047,7 @@ class MQTTClient(OMPluginBase):
 
     def on_message(self, client, userdata, msg):
         output_regexp = self._output_command_topic.replace('+', '(\d+)')
+        brightness_regexp = self._brightness_command_topic.replace('+', '(\d+)')
         shutter_regexp = self._shutter_command_topic.replace('+', '(\d+)')
         shutter_position_regexp = self._shutter_position_command_topic.replace('+', '(\d+)')
 
@@ -1004,6 +1055,10 @@ class MQTTClient(OMPluginBase):
             # the output_id is the first match of the regular expression
             output_id = int(re.findall(output_regexp, msg.topic)[0])
             self._output_command(output_id, msg)
+        elif re.search(brightness_regexp, msg.topic) is not None:
+            # the output_id is the first match of the regular expression
+            output_id = int(re.findall(brightness_regexp, msg.topic)[0])
+            self._brightness_command(output_id, msg)
         elif re.search(shutter_regexp, msg.topic) is not None:
             # the shutter_id is the first match of the regular expression
             shutter_id = int(re.findall(shutter_regexp, msg.topic)[0])
@@ -1019,6 +1074,29 @@ class MQTTClient(OMPluginBase):
     def _output_command(self, output_id, msg):
         try:
             if output_id in self._outputs:
+                value = msg.payload.decode("utf-8")
+                logger.info("output value: {} == 'ON': {}",format(value, value=="ON"))
+                if value == "ON":
+                    is_on = 'true'
+                else:
+                    is_on = 'false'
+                result = json.loads(self.webinterface.set_output(id=output_id, is_on=is_on, dimmer=None))
+                if result['success'] is False:
+                    log_message = 'Failed to set output {0} to {1}: {2}'.format(output_id, value, result.get('msg', 'Unknown error'))
+                    self._log(log_message)
+                    logger.error(log_message)
+                else:
+                    log_message = 'Message for output {0} with payload {1}'.format(output_id, value)
+                    self._log(log_message)
+                    logger.info(log_message)
+            else:
+                self._log('Unknown output: {0}'.format(output_id))
+        except Exception as ex:
+            self._log('Failed to process message')
+
+    def _brightness_command(self, output_id, msg):
+        try:
+            if output_id in self._outputs:
                 output = self._outputs[output_id]
                 value = int(msg.payload)
                 if value > 0:
@@ -1028,8 +1106,6 @@ class MQTTClient(OMPluginBase):
                 dimmer = None
                 if output['module_type'] == 'dimmer':
                     dimmer = None if value == 0 else max(0, min(100, value))
-                    if value > 0:
-                        log_value = '{0} ON ({1}%)'.format(output_id, value)
                 result = json.loads(self.webinterface.set_output(id=output_id, is_on=is_on, dimmer=dimmer))
                 if result['success'] is False:
                     log_message = 'Failed to set output {0} to {1}: {2}'.format(output_id, value, result.get('msg', 'Unknown error'))
