@@ -217,16 +217,12 @@ class HomeAssistant():
         if light.get('room_id') in self._rooms:
             room = self._rooms[light.get('room_id')]['name']
 
-        return {
+        discovery_json = {
             "name": light.get('name'),
             "unique_id": "openmotics {0} light".format(light.get('name').lower()),
             "state_topic": self._config.get('output_status_topic_format').format(id=output_id),
             "command_topic": self._config.get('output_command_topic').replace('+', str(output_id)),
             "state_value_template": "{{ value_json.onoff }}",
-            "brightness_state_topic": self._config.get('brightness_status_topic_format').format(id=output_id),
-            "brightness_command_topic": self._config.get('brightness_command_topic').replace('+', str(output_id)),
-            "brightness_value_template": "{{ value_json.value }}",
-            "brightness_scale": "100",
             "payload_on": "ON",
             "payload_off": "OFF",
             "payload_available": "100",
@@ -241,6 +237,14 @@ class HomeAssistant():
             },
             "device_class": HomeAssistant.output_ha_types.get(light.get('type'))
         }
+
+        if light.get('module_type') == 'dimmer':
+            discovery_json['brightness_state_topic'] = self._config.get('brightness_status_topic_format').format(id=output_id)
+            discovery_json['brightness_command_topic'] = self._config.get('brightness_command_topic').replace('+', str(output_id))
+            discovery_json['brightness_value_template'] = "{{ value_json.value }}"
+            discovery_json['brightness_scale'] = "100"
+
+        return discovery_json
 
     def _dump_switch_discovery_json(self, output_id, switch):
         room = ''

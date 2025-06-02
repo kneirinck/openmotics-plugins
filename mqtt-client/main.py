@@ -430,7 +430,6 @@ class MQTTClient(OMPluginBase):
                     ids = []
                     for config in result['config']:
                         if config['module_type'] not in ['o', 'O', 'd', 'D']:
-                            logger.info('Output module {} ({}) has type: {}'.format(output_id, config['name'], config['module_type']))
                             continue
                         if not config['module']['hardware_type'] in [HardwareType.PHYSICAL, HardwareType.VIRTUAL]:
                             continue
@@ -1051,7 +1050,6 @@ class MQTTClient(OMPluginBase):
         brightness_regexp = self._brightness_command_topic.replace('+', '(\d+)')
         shutter_regexp = self._shutter_command_topic.replace('+', '(\d+)')
         shutter_position_regexp = self._shutter_position_command_topic.replace('+', '(\d+)')
-        logger.info('Got message: {} with payload {}'.format(msg.topic, msg.payload))
 
         if re.search(output_regexp, msg.topic) is not None:
             # the output_id is the first match of the regular expression
