@@ -438,7 +438,7 @@ class HomeAssistant():
                 "model": "Energy module"
             },
             "device_class": "voltage",
-            "state_class": "total_increasing"
+            "state_class": "measurement"
         }
 
     def _dump_power_current_discovery_json(self, module_id, sensor_id, current):
@@ -456,7 +456,7 @@ class HomeAssistant():
                 "model": "Energy module"
             },
             "device_class": "current",
-            "state_class": "total_increasing"
+            "state_class": "measurement"
         }
 
     def _dump_power_frequency_discovery_json(self, module_id, sensor_id, frequency):
@@ -474,7 +474,7 @@ class HomeAssistant():
                 "model": "Energy module"
             },
             "device_class": "frequency",
-            "state_class": "total_increasing"
+            "state_class": "measurement"
         }
 
     def _dump_sensor_discovery_json(self, sensor_id, sensor):
