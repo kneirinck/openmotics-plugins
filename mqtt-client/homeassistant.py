@@ -218,8 +218,8 @@ class HomeAssistant():
             room = self._rooms[light.get('room_id')]['name']
 
         return {
-            "name": light.get('name'),
-            "unique_id": "openmotics {0} light".format(light.get('name').lower()),
+            "name": light.get('name') or str(output_id),
+            "unique_id": "openmotics {0} light".format(light.get('name').lower() or output_id),
             "state_topic": self._config.get('output_status_topic_format').format(id=output_id),
             "command_topic": self._config.get('output_command_topic').replace('+', str(output_id)),
             "state_value_template": "{{ value_json.value }}",
